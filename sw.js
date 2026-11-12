@@ -1,5 +1,5 @@
 /* Bill Runway service worker - cache the app shell so it opens offline. */
-var CACHE = "bill-runway-v2";
+var CACHE = "bill-runway-v3";
 var ASSETS = [
   "./",
   "./index.html",
