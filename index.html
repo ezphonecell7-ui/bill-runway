@@ -221,6 +221,15 @@ hr{border:0;border-top:1px solid var(--line);margin:0}
       </div>
     </div>
     <p class="hint">Income is only used to work out what's left over. Leave it blank to skip that.</p>
+    <hr>
+    <div class="field">
+      <label>Notifications</label>
+      <div class="actions">
+        <button class="icon" id="btnNotify" type="button">Turn on notifications</button>
+        <span class="note" id="notifyState"></span>
+      </div>
+      <p class="hint" id="notifyHint">Get told when a bill is close, without opening the app.</p>
+    </div>
     <div class="actions">
       <button class="btn" type="submit">Save</button>
       <button class="btn ghost" type="button" id="sCancel">Close</button>
@@ -585,6 +594,19 @@ hr{border:0;border-top:1px solid var(--line);margin:0}
   function save(){
     try{ localStorage.setItem(STORE, JSON.stringify(state)); }
     catch(e){ toast("Couldn't save on this device. Private browsing blocks storage."); }
+    mirrorState();
+  }
+
+  function mirrorState(){
+    if(!("caches" in window)) return;
+    try{
+      caches.open("bill-runway-state").then(function(c){
+        c.put("./__state.json", new Response(JSON.stringify({
+          remindDays: state.remindDays,
+          bills: state.bills
+        }), {headers:{"Content-Type":"application/json"}}));
+      }).catch(function(){});
+    }catch(e){}
   }
   function uid(p){ return (p||"x") + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 
@@ -601,7 +623,8 @@ hr{border:0;border-top:1px solid var(--line);margin:0}
    "spendBreak","spendBreakRows","spendList",
    "breakdown","breakdownRows","heavy","heavyRows","heavyNote","annual","annualRows",
    "history","historyRows","btnClearHist","insightEmpty",
-   "noteDays","btnExport","btnImport","fileImport","btnInstall"].forEach(function(k){ el[k] = $(k); });
+   "noteDays","btnExport","btnImport","fileImport","btnInstall",
+   "btnNotify","notifyState","notifyHint"].forEach(function(k){ el[k] = $(k); });
 
   var editingId = null, editingSpendId = null, freqTouched = false, toastTimer = null;
 
@@ -788,13 +811,15 @@ hr{border:0;border-top:1px solid var(--line);margin:0}
 
   /* ---------- computation ---------- */
   function computed(b){
-    var t = today(), from = t;
+    var t = today();
+    // The next UNPAID payment: count forward from the last one marked paid,
+    // or from the bill's own start date if nothing has been paid yet.
+    var from;
     if(b.paidThrough){
       var pt = parseD(b.paidThrough);
-      if(pt){
-        var after = addDays(pt,1);
-        if(after > from) from = after;
-      }
+      from = pt ? addDays(pt,1) : t;
+    } else {
+      from = parseD(b.anchor) || t;
     }
     var due = nextDue(b, from);
     if(!due) return null;
@@ -874,8 +899,41 @@ hr{border:0;border-top:1px solid var(--line);margin:0}
   function addToCalendar(bills, label){
     bills = bills.filter(function(b){ return !b.paused; });
     if(!bills.length){ toast("Nothing to add."); return; }
-    var ok = download("bill-runway.ics", buildIcs(bills), "text/calendar;charset=utf-8");
-    toast(ok ? "Opening " + label + " in your calendar — tap Add." : "Your browser blocked that download.");
+    var fname = bills.length === 1
+      ? "bill-" + slug(bills[0].name) + ".ics"
+      : "bill-runway-all.ics";
+    var ok = download(fname, buildIcs(bills), "text/calendar;charset=utf-8");
+    toast(ok ? "Downloaded " + fname + " — open it to add to your calendar."
+             : "Your browser blocked that download.");
+  }
+
+  function slug(s){
+    return String(s).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,40) || "bill";
+  }
+
+  function googleCalUrl(b){
+    var c = computed(b);
+    if(!c) return null;
+    var f = FREQ[b.freq] || FREQ.monthly;
+    var rule;
+    if(f.semi){
+      var ds = semiDays(b);
+      rule = "RRULE:FREQ=MONTHLY;BYMONTHDAY=" + ds[0] + "," + ds[1];
+    } else if(f.days){
+      rule = "RRULE:FREQ=WEEKLY;INTERVAL=" + (f.days/7);
+    } else {
+      var dom = parseD(b.anchor) ? parseD(b.anchor).getDate() : c.due.getDate();
+      rule = "RRULE:FREQ=MONTHLY;INTERVAL=" + f.months + ";BYMONTHDAY=" + (dom > 28 ? -1 : dom);
+    }
+    var d0 = icsDate(c.due), d1 = icsDate(addDays(c.due,1));
+    var text = b.name + " — " + money(Number(b.amount)||0) + (b.autopay ? " (autopay)" : "");
+    var details = TYPES[typeOf(b)].label + " · " + (FREQ[b.freq] ? FREQ[b.freq].label : "Monthly")
+                + " · " + money(Number(b.amount)||0) + (b.autopay ? ". Pays automatically." : ".");
+    return "https://calendar.google.com/calendar/render?action=TEMPLATE"
+      + "&text=" + encodeURIComponent(text)
+      + "&dates=" + d0 + "/" + d1
+      + "&details=" + encodeURIComponent(details)
+      + "&recur=" + encodeURIComponent(rule);
   }
   el.btnCal.addEventListener("click", function(){ addToCalendar(state.bills.slice(), "all bills"); });
 
@@ -1071,7 +1129,11 @@ hr{border:0;border-top:1px solid var(--line);margin:0}
         save(); render();
         toast(b.name + " marked paid.");
       }));
-      tools.appendChild(btn("icon", "Add to calendar", function(){ addToCalendar([b], b.name); }));
+      tools.appendChild(btn("icon", "Google Calendar", function(){
+        var u = googleCalUrl(b);
+        if(u) window.open(u, "_blank", "noopener");
+      }));
+      tools.appendChild(btn("icon", "Download .ics", function(){ addToCalendar([b], b.name); }));
     }
     tools.appendChild(btn("icon", "Edit", function(){ openForm(b); }));
     tools.appendChild(btn("icon", b.paused ? "Resume" : "Pause", function(){
@@ -1360,9 +1422,107 @@ hr{border:0;border-top:1px solid var(--line);margin:0}
     });
   })();
 
+  /* ---------- notifications ---------- */
+  var swReg = null;
+
+  function notifySupported(){
+    return ("Notification" in window) && ("serviceWorker" in navigator);
+  }
+  function notifyStatus(){
+    if(!notifySupported()) return "unsupported";
+    return Notification.permission;
+  }
+  function paintNotifyUI(){
+    if(!el.btnNotify) return;
+    var s = notifyStatus();
+    if(s === "unsupported"){
+      el.btnNotify.hidden = true;
+      el.notifyState.textContent = "Not available in this browser.";
+      el.notifyHint.textContent = "Use the calendar buttons on each bill instead.";
+      return;
+    }
+    if(s === "granted"){
+      el.btnNotify.textContent = "Send a test notification";
+      el.notifyState.textContent = "On";
+      el.notifyHint.textContent =
+        "You'll be told when a bill is within " + state.remindDays +
+        " days — each time you open the app, and once a day in the background on Android.";
+    } else if(s === "denied"){
+      el.btnNotify.hidden = true;
+      el.notifyState.textContent = "Blocked";
+      el.notifyHint.textContent =
+        "Notifications are blocked for this site. Turn them back on in your browser's site settings, then reopen the app.";
+    } else {
+      el.btnNotify.textContent = "Turn on notifications";
+      el.notifyState.textContent = "";
+      el.notifyHint.textContent = "Get told when a bill is close, without opening the app.";
+    }
+  }
+  function askNotify(){
+    if(!notifySupported()) return;
+    if(Notification.permission === "granted"){ showDue(true); return; }
+    Notification.requestPermission().then(function(p){
+      paintNotifyUI();
+      if(p === "granted"){ registerPeriodic(); showDue(true); }
+    });
+  }
+  function dueList(){
+    var out2 = [];
+    state.bills.forEach(function(b){
+      if(b.paused) return;
+      var c = computed(b);
+      if(!c) return;
+      if(c.daysLeft <= state.remindDays) out2.push({b:b, c:c});
+    });
+    out2.sort(function(x,y){ return x.c.daysLeft - y.c.daysLeft; });
+    return out2;
+  }
+  function showDue(force){
+    if(!notifySupported() || Notification.permission !== "granted") return;
+    var t = today();
+    var stamp = t.getFullYear()+"-"+(t.getMonth()+1)+"-"+t.getDate();
+    if(!force){
+      try{ if(localStorage.getItem("billrunway.notified") === stamp) return; }catch(e){}
+    }
+    var hits = dueList();
+    if(!hits.length){
+      if(force) toast("Nothing due within " + state.remindDays + " days.");
+      return;
+    }
+    var body = hits.slice(0,3).map(function(h){
+      var when = h.c.daysLeft < 0 ? Math.abs(h.c.daysLeft) + "d overdue"
+        : h.c.daysLeft === 0 ? "today" : "in " + h.c.daysLeft + "d";
+      return h.b.name + " " + money(Number(h.b.amount)||0) + " " + when + (h.b.autopay ? " (auto)" : "");
+    });
+    if(hits.length > 3) body.push("+" + (hits.length-3) + " more");
+    var title = hits.length === 1 ? "1 bill needs attention" : hits.length + " bills need attention";
+    var opts = {body: body.join("\n"), icon:"icon-192.png", badge:"icon-192.png",
+                tag:"bill-runway-due", renotify:true};
+    try{
+      if(swReg && swReg.showNotification) swReg.showNotification(title, opts);
+      else new Notification(title, opts);
+      localStorage.setItem("billrunway.notified", stamp);
+    }catch(e){}
+  }
+  function registerPeriodic(){
+    if(!swReg || !("periodicSync" in swReg)) return;
+    if(!navigator.permissions) return;
+    navigator.permissions.query({name:"periodic-background-sync"}).then(function(st){
+      if(st.state !== "granted") return;
+      swReg.periodicSync.register("bill-check", {minInterval: 12*60*60*1000}).catch(function(){});
+    }).catch(function(){});
+  }
+
+  if(el.btnNotify) el.btnNotify.addEventListener("click", askNotify);
+
   if("serviceWorker" in navigator && location.protocol !== "file:"){
     window.addEventListener("load", function(){
-      navigator.serviceWorker.register("sw.js").catch(function(){});
+      navigator.serviceWorker.register("sw.js").then(function(reg){
+        swReg = reg;
+        mirrorState();
+        registerPeriodic();
+        setTimeout(function(){ showDue(false); }, 1200);
+      }).catch(function(){});
     });
   }
 
@@ -1371,6 +1531,8 @@ hr{border:0;border-top:1px solid var(--line);margin:0}
   el.fDate.value = fmtD(today());
   el.pDate.value = fmtD(today());
   syncFreqUI();
+  paintNotifyUI();
+  mirrorState();
   try{
     var saved = localStorage.getItem("billrunway.tab");
     if(saved === "spend" || saved === "insight" || saved === "bills") setTab(saved); else setTab("bills");
