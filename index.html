@@ -6,6 +6,13 @@
 <title>Bill Runway</title>
 <meta name="description" content="Track recurring bills and everyday spending, and see what's left over each month.">
 <meta name="theme-color" content="#1f5d4c">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Bill Runway">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="mobile-web-app-capable" content="yes">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Public+Sans:wght@400;500;600&display=swap">
 <style>
 :root{
@@ -175,6 +182,7 @@ hr{border:0;border-top:1px solid var(--line);margin:0}
       <p class="lede">Bills, spending, and what's actually left.</p>
     </div>
     <div class="actions">
+      <button class="icon" id="btnInstall" type="button" hidden>Install app</button>
       <button class="icon" id="btnSettings" type="button">Income &amp; settings</button>
     </div>
   </div>
@@ -593,7 +601,7 @@ hr{border:0;border-top:1px solid var(--line);margin:0}
    "spendBreak","spendBreakRows","spendList",
    "breakdown","breakdownRows","heavy","heavyRows","heavyNote","annual","annualRows",
    "history","historyRows","btnClearHist","insightEmpty",
-   "noteDays","btnExport","btnImport","fileImport"].forEach(function(k){ el[k] = $(k); });
+   "noteDays","btnExport","btnImport","fileImport","btnInstall"].forEach(function(k){ el[k] = $(k); });
 
   var editingId = null, editingSpendId = null, freqTouched = false, toastTimer = null;
 
@@ -1326,6 +1334,35 @@ hr{border:0;border-top:1px solid var(--line);margin:0}
       n.textContent = "due " + (dd ? shortDate(dd) : h.due) + " · marked paid " + (pd ? shortDate(pd) : h.paidOn);
       row.appendChild(l); row.appendChild(v); row.appendChild(n);
       el.historyRows.appendChild(row);
+    });
+  }
+
+  /* ---------- install to home screen ---------- */
+  (function(){
+    var deferred = null;
+    window.addEventListener("beforeinstallprompt", function(e){
+      e.preventDefault();
+      deferred = e;
+      el.btnInstall.hidden = false;
+    });
+    el.btnInstall.addEventListener("click", function(){
+      if(!deferred) return;
+      deferred.prompt();
+      deferred.userChoice.then(function(){
+        deferred = null;
+        el.btnInstall.hidden = true;
+      });
+    });
+    window.addEventListener("appinstalled", function(){
+      deferred = null;
+      el.btnInstall.hidden = true;
+      toast("Installed. Open it from your home screen.");
+    });
+  })();
+
+  if("serviceWorker" in navigator && location.protocol !== "file:"){
+    window.addEventListener("load", function(){
+      navigator.serviceWorker.register("sw.js").catch(function(){});
     });
   }
 
